@@ -15,6 +15,7 @@ contract MultiStrategyVault is ERC4626, AccessControl {
     error MultiStrategyVault__AllocationStrategyAddressCannotBeZero();
     error MultiStrategyVault__TotalAllocationExceedsMaxBps();
     error MultiStrategyVault__SharesMustBeGreaterThanZero();
+    error MultiStrategyVault__ContractPaused();
     error MultiStrategyVault__InsufficientLiquidity();
     error MultiStrategyVault__OnlyRequestOwnerCanCall();
     error MultiStrategyVault__RequestAlreadyClaimed();
@@ -44,13 +45,19 @@ contract MultiStrategyVault is ERC4626, AccessControl {
     mapping(uint256 => WithdrawRequest) public withdrawalRequests;
     mapping(address => uint256[]) public userToWithdrawalRequests;
     uint256 public nextRequestId;
+    bool public paused;
 
-    constructor(ERC20 asset) ERC4626(asset, "TokenMetricsVaultToken", "TMVT") {
+    modifier whenNotPaused() {
+        if (paused) revert MultiStrategyVault__ContractPaused();
+        _;
+    }
+
+    constructor(ERC20 asset) ERC4626(asset, "Token Metrics Vault Token", "TMVT") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(MANAGER_ROLE, msg.sender);
     }
 
-    function setAllocations(Allocation[] calldata _allocations) external onlyRole(MANAGER_ROLE) {
+    function setAllocations(Allocation[] calldata _allocations) external onlyRole(MANAGER_ROLE) whenNotPaused {
         // Implementation for setting allocations goes here
         uint256 totalBps = 0;
         for (uint256 i = 0; i < _allocations.length; i++) {
@@ -77,7 +84,15 @@ contract MultiStrategyVault is ERC4626, AccessControl {
         }
     }
 
-    function rebalance() external onlyRole(MANAGER_ROLE) {
+    function deposit(uint256 assets, address receiver) public override whenNotPaused returns (uint256) {
+        return super.deposit(assets, receiver);
+    }
+
+    function mint(uint256 shares, address receiver) public override whenNotPaused returns (uint256) {
+        return super.mint(shares, receiver);
+    }
+
+    function rebalance() external onlyRole(MANAGER_ROLE) whenNotPaused {
         // Move funds to match target allocations
         uint256 total = totalAssets();
 
@@ -165,7 +180,7 @@ contract MultiStrategyVault is ERC4626, AccessControl {
         }
     }
 
-    function requestWithdraw(uint256 shares) external returns (uint256 requestId) {
+    function requestWithdraw(uint256 shares) external whenNotPaused returns (uint256 requestId) {
         if (shares <= 0) {
             revert MultiStrategyVault__SharesMustBeGreaterThanZero();
         }
@@ -175,7 +190,7 @@ contract MultiStrategyVault is ERC4626, AccessControl {
         uint256 immediate = assets <= availableLiquidity ? assets : availableLiquidity;
         if (immediate > 0) {
             // Immediate withdrawal and transfer to user.
-            _pullLiquidFunds(assets);
+            _pullLiquidFunds(immediate);
             asset.transfer(msg.sender, immediate);
         }
         uint256 pending = assets - immediate;
@@ -187,7 +202,7 @@ contract MultiStrategyVault is ERC4626, AccessControl {
         }
     }
 
-    function claimWithdraw(uint256 requestId) external {
+    function claimWithdraw(uint256 requestId) external whenNotPaused {
         WithdrawRequest memory req = withdrawalRequests[requestId];
         if (msg.sender != req.user) {
             revert MultiStrategyVault__OnlyRequestOwnerCanCall();
@@ -195,7 +210,7 @@ contract MultiStrategyVault is ERC4626, AccessControl {
         if (req.claimed) {
             revert MultiStrategyVault__RequestAlreadyClaimed();
         }
-        req.claimed = true;
+        withdrawalRequests[requestId].claimed = true;
         _pullLiquidFunds(req.assets);
         asset.transfer(msg.sender, req.assets);
     }
@@ -206,5 +221,13 @@ contract MultiStrategyVault is ERC4626, AccessControl {
             return false;
         }
         return _availableLiquidity() >= req.assets;
+    }
+
+    function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        paused = true;
+    }
+
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        paused = false;
     }
 }
