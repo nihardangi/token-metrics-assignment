@@ -6,6 +6,26 @@ import {ERC4626, ERC20} from "@solmate/tokens/ERC4626.sol";
 import {AccessControl} from "@openzeppelin/access/AccessControl.sol";
 import {IStrategy} from "./interfaces/IStrategy.sol";
 
+/*
+     * @title MultiStrategyVault
+     * @author Nihar Dangi
+     *
+     * @notice The system is designed to be as minimal as possible. It consists of a single MultiStrategyVault contract that
+     * manages multiple strategies for yield generation. Users can deposit and withdraw assets from the vault,
+     * and the vault will allocate funds across the different strategies based on predefined target allocations.     
+     *     
+     * Typical flow:
+     * 1. Users deposit USDC into the MultiStrategyVault and receive vault shares in return.
+     * 2. The vault allocates the deposited USDC across multiple strategies based on predefined target basis points (bps).
+     * 3. Users can request withdrawals by burning their vault shares
+     * 4. If sufficient liquidity is available in the vault, the withdrawal is processed immediately. If not, the request is queued.
+     * 5. Users can claim their queued withdrawals once sufficient liquidity is available.
+     * 6. The vault can be rebalanced by a manager to ensure that the allocations across strategies remain aligned with the target bps.
+     * 7. The vault includes pause functionality to halt deposits, mints, and withdrawals in case of emergencies.
+     * 8. Access control is implemented to restrict certain functions to authorized roles only.
+     *
+     * @dev Inherits from ERC4626 for vault functionality and AccessControl for role-based access management.     
+*/
 contract MultiStrategyVault is ERC4626, AccessControl {
     ////////////////
     ///  Errors  ///
@@ -47,16 +67,29 @@ contract MultiStrategyVault is ERC4626, AccessControl {
     uint256 public nextRequestId;
     bool public paused;
 
+    ////////////////////
+    ///  Modifiers  ///
+    ///////////////////
     modifier whenNotPaused() {
         if (paused) revert MultiStrategyVault__ContractPaused();
         _;
     }
 
+    ////////////////////
+    ///  Functions  ///
+    ///////////////////
     constructor(ERC20 asset) ERC4626(asset, "Token Metrics Vault Token", "TMVT") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(MANAGER_ROLE, msg.sender);
     }
 
+    /////////////////////////////////////
+    ///  External & Public Functions  ///
+    /////////////////////////////////////
+    /*
+     * @param _allocations: The allocations to set
+     * @notice This function will set the allocations array for the vault. Only callable by MANAGER_ROLE.
+     */
     function setAllocations(Allocation[] calldata _allocations) external onlyRole(MANAGER_ROLE) whenNotPaused {
         // Implementation for setting allocations goes here
         uint256 totalBps = 0;
@@ -84,14 +117,28 @@ contract MultiStrategyVault is ERC4626, AccessControl {
         }
     }
 
+    /*
+     * @param assets: The amount of the underlying asset to deposit
+     * @param receiver: The address that will receive the minted shares
+     * @notice This function will deposit user's assets and mint shares in the vault.
+     */
     function deposit(uint256 assets, address receiver) public override whenNotPaused returns (uint256) {
         return super.deposit(assets, receiver);
     }
 
+    /*
+     * @param shares: The amount of shares to mint
+     * @param receiver: The address that will receive the minted shares
+     * @notice This function will mint shares in the vault.
+     */
     function mint(uint256 shares, address receiver) public override whenNotPaused returns (uint256) {
         return super.mint(shares, receiver);
     }
 
+    /*    
+     * @notice This function will rebalance the vault's allocations according to the target bps set for each strategy.
+     * Only callable by MANAGER_ROLE.
+     */
     function rebalance() external onlyRole(MANAGER_ROLE) whenNotPaused {
         // Move funds to match target allocations
         uint256 total = totalAssets();
@@ -126,6 +173,9 @@ contract MultiStrategyVault is ERC4626, AccessControl {
         }
     }
 
+    /*    
+     * @notice This function will return the total assets managed by the vault across all strategies.
+     */
     function totalAssets() public view virtual override returns (uint256) {
         uint256 total = asset.balanceOf(address(this));
         for (uint256 i = 0; i < allocations.length; i++) {
@@ -134,59 +184,11 @@ contract MultiStrategyVault is ERC4626, AccessControl {
         return total;
     }
 
-    function afterDeposit(uint256 assets, uint256 shares) internal virtual override {
-        uint256 total = totalAssets();
-        for (uint256 i = 0; i < allocations.length; i++) {
-            Allocation memory allocation = allocations[i];
-            uint256 maxAllowed = (total * allocation.targetBps) / MAX_BPS;
-            uint256 currentAmount = IStrategy(allocation.strategy).totalAssets();
-            if (maxAllowed <= currentAmount) {
-                continue;
-            }
-
-            uint256 allocationAmount = (assets * allocation.targetBps) / MAX_BPS;
-            uint256 toDeposit = maxAllowed - currentAmount;
-            if (allocationAmount < toDeposit) {
-                toDeposit = allocationAmount;
-            }
-
-            asset.approve(allocation.strategy, toDeposit);
-            IStrategy(allocation.strategy).deposit(toDeposit);
-        }
-    }
-
-    // Only fetch from strategies with instant liquidity (no lockup)
-    function _availableLiquidity() internal view returns (uint256) {
-        uint256 available = asset.balanceOf(address(this));
-        for (uint256 i = 0; i < allocations.length; i++) {
-            Allocation memory allocation = allocations[i];
-            if (!IStrategy(allocation.strategy).hasLockup()) {
-                available += IStrategy(allocation.strategy).totalAssets();
-            }
-        }
-        return available;
-    }
-
-    // Pull funds from strategies with instant liquidity (no lockup)
-    function _pullLiquidFunds(uint256 assets) internal {
-        uint256 remaining = assets;
-        for (uint256 i = 0; i < allocations.length; i++) {
-            Allocation memory allocation = allocations[i];
-            if (!IStrategy(allocation.strategy).hasLockup()) {
-                uint256 available = IStrategy(allocation.strategy).totalAssets();
-                if (available > 0) {
-                    uint256 toWithdraw = available < remaining ? available : remaining;
-                    IStrategy(allocation.strategy).withdraw(toWithdraw, address(this));
-                    remaining -= toWithdraw;
-                }
-            }
-            if (remaining == 0) break;
-        }
-        if (remaining != 0) {
-            revert MultiStrategyVault__InsufficientLiquidity();
-        }
-    }
-
+    /*
+     * @param shares: The amount of shares to withdraw     
+     * @notice This function will request a withdrawal from the vault. It will attempt to fulfill the withdrawal
+     * immediately from available liquidity. If insufficient liquidity is available, the remaining amount will be queued.
+     */
     function requestWithdraw(uint256 shares) external whenNotPaused returns (uint256 requestId) {
         if (shares <= 0) {
             revert MultiStrategyVault__SharesMustBeGreaterThanZero();
@@ -209,6 +211,10 @@ contract MultiStrategyVault is ERC4626, AccessControl {
         }
     }
 
+    /*
+     * @param requestId: The ID of the withdrawal request to claim     
+     * @notice This function will allow users to claim their queued withdrawals once sufficient liquidity is available.
+     */
     function claimWithdraw(uint256 requestId) external whenNotPaused {
         WithdrawRequest memory req = withdrawalRequests[requestId];
         if (msg.sender != req.user) {
@@ -222,6 +228,10 @@ contract MultiStrategyVault is ERC4626, AccessControl {
         asset.transfer(msg.sender, req.assets);
     }
 
+    /*
+     * @param requestId: The ID of the withdrawal request to check
+     * @notice This function will return true if the withdrawal request can be claimed (i.e., sufficient liquidity is available).
+     */
     function canClaim(uint256 requestId) public view returns (bool) {
         WithdrawRequest memory req = withdrawalRequests[requestId];
         if (req.claimed) {
@@ -230,11 +240,86 @@ contract MultiStrategyVault is ERC4626, AccessControl {
         return _availableLiquidity() >= req.assets;
     }
 
+    /*
+     * @notice This function will pause the contract, preventing deposits, mints, and withdrawals. 
+     * Only callable by DEFAULT_ADMIN_ROLE.
+     */
     function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         paused = true;
     }
 
+    /*
+     * @notice This function will unpause the contract, allowing deposits, mints, and withdrawals. 
+     * Only callable by DEFAULT_ADMIN_ROLE.
+     */
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         paused = false;
+    }
+
+    //////////////////////////////////////
+    ///  Internal & Private Functions  ///
+    //////////////////////////////////////
+    /*
+     * @param assets: The amount of the underlying asset deposited
+     * @param shares: The amount of shares minted
+     * @notice This function is called after a deposit is made (hook) to allocate funds to strategies based on target bps.
+     */
+    function afterDeposit(uint256 assets, uint256 shares) internal virtual override {
+        uint256 total = totalAssets();
+        for (uint256 i = 0; i < allocations.length; i++) {
+            Allocation memory allocation = allocations[i];
+            uint256 maxAllowed = (total * allocation.targetBps) / MAX_BPS;
+            uint256 currentAmount = IStrategy(allocation.strategy).totalAssets();
+            if (maxAllowed <= currentAmount) {
+                continue;
+            }
+
+            uint256 allocationAmount = (assets * allocation.targetBps) / MAX_BPS;
+            uint256 toDeposit = maxAllowed - currentAmount;
+            if (allocationAmount < toDeposit) {
+                toDeposit = allocationAmount;
+            }
+
+            asset.approve(allocation.strategy, toDeposit);
+            IStrategy(allocation.strategy).deposit(toDeposit);
+        }
+    }
+
+    /*     
+     * @notice This function will return the total available liquidity in the vault, including funds in strategies without lockup.
+     */
+    function _availableLiquidity() internal view returns (uint256) {
+        uint256 available = asset.balanceOf(address(this));
+        for (uint256 i = 0; i < allocations.length; i++) {
+            Allocation memory allocation = allocations[i];
+            // Only fetch from strategies with instant liquidity (no lockup)
+            if (!IStrategy(allocation.strategy).hasLockup()) {
+                available += IStrategy(allocation.strategy).totalAssets();
+            }
+        }
+        return available;
+    }
+
+    /*     
+     * @notice This function will pull liquid funds from strategies without lockup to fulfill withdrawal requests.
+     */
+    function _pullLiquidFunds(uint256 assets) internal {
+        uint256 remaining = assets;
+        for (uint256 i = 0; i < allocations.length; i++) {
+            Allocation memory allocation = allocations[i];
+            // Pull funds from strategies with instant liquidity (no lockup)
+            if (!IStrategy(allocation.strategy).hasLockup()) {
+                uint256 available = IStrategy(allocation.strategy).totalAssets();
+                if (available > 0) {
+                    uint256 toWithdraw = available < remaining ? available : remaining;
+                    IStrategy(allocation.strategy).withdraw(toWithdraw, address(this));
+                    remaining -= toWithdraw;
+                }
+            }
+            if (remaining == 0) break;
+        }
+        if (remaining != 0) {
+            revert MultiStrategyVault__InsufficientLiquidity();
+        }
     }
 }
