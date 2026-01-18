@@ -40,7 +40,7 @@ contract MultiStrategyVault is ERC4626, AccessControl {
     // Create a new role identifier for the manager role
     bytes32 public constant MANAGER_ROLE = keccak256("MANAGER_ROLE");
     uint256 public constant MAX_BPS = 10_000; // 100%
-    uint256 public constant MAX_BPS_PER_STRATEGY = 5_000; // 50%
+    uint256 public constant MAX_BPS_PER_STRATEGY = 6_000; // 60%
     Allocation[] public allocations;
     mapping(uint256 => WithdrawRequest) public withdrawalRequests;
     mapping(address => uint256[]) public userToWithdrawalRequests;
