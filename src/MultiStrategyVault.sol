@@ -246,6 +246,26 @@ contract MultiStrategyVault is ERC4626, AccessControl {
     }
 
     /*
+     * @param user: The address of the user to get withdrawal requests for
+     * @notice This function will return an array of pending withdrawal request IDs for the specified user.
+     */
+    function getUserWithdrawalRequests(address user) external view returns (uint256[] memory) {
+        uint256[] memory requestIDs = userToWithdrawalRequests[user];
+        uint256[] memory pendingRequestIDs = new uint256[](requestIDs.length);
+        uint256 pendingCount = 0;
+        for (uint256 i = 0; i < requestIDs.length; i++) {
+            if (!withdrawalRequests[requestIDs[i]].claimed) {
+                pendingRequestIDs[pendingCount] = requestIDs[i];
+                pendingCount++;
+            }
+        }
+        assembly {
+            mstore(pendingRequestIDs, pendingCount)
+        }
+        return pendingRequestIDs;
+    }
+
+    /*
      * @notice This function will pause the contract, preventing deposits, mints, and withdrawals. 
      * Only callable by DEFAULT_ADMIN_ROLE.
      */
