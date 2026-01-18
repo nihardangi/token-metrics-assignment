@@ -23,6 +23,11 @@ import {IStrategy} from "./interfaces/IStrategy.sol";
      * 6. The vault can be rebalanced by a manager to ensure that the allocations across strategies remain aligned with the target bps.
      * 7. The vault includes pause functionality to halt deposits, mints, and withdrawals in case of emergencies.
      * 8. Access control is implemented to restrict certain functions to authorized roles only.
+     * 
+     * Assumptions:     
+     * 1. Strategies are assumed to be vault-specific, meaning they only manage funds from this specific vault.
+     * 2. Cap Enforcement: Each strategy has a maximum allocation limit to prevent over-concentration of funds.
+     * 3. Various checks are in place to prevent concentration risk, ensuring no single strategy can dominate the vault's allocations.        
      *
      * @dev Inherits from ERC4626 for vault functionality and AccessControl for role-based access management.     
 */
