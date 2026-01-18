@@ -142,3 +142,81 @@ This implementation demonstrates:
 - Lockup-aware withdrawal handling
 - Allocation cap enforcement
 - Emergency safety controls
+
+## ⚙️ Installation & Setup
+
+This project uses **Foundry** for development and testing.
+
+---
+
+### Install Foundry
+
+If you don’t have Foundry installed, run:
+
+```bash
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
+```
+
+## Verify installation:
+
+forge --version
+
+### Install Dependencies
+
+The project depends on Solmate and OpenZeppelin Contracts.
+
+```
+forge install transmissions11/solmate
+forge install OpenZeppelin/openzeppelin-contracts
+```
+
+### Build
+
+```shell
+$ forge build
+```
+
+### Test
+
+```shell
+$ forge test
+```
+
+### Format
+
+```shell
+$ forge fmt
+```
+
+### Gas Snapshots
+
+```shell
+$ forge snapshot
+```
+
+### Anvil
+
+```shell
+$ anvil
+```
+
+### Deploy
+
+```shell
+$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
+```
+
+### Cast
+
+```shell
+$ cast <subcommand>
+```
+
+### Help
+
+```shell
+$ forge --help
+$ anvil --help
+$ cast --help
+```
