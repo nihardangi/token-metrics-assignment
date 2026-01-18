@@ -35,7 +35,6 @@ contract TestMultiStrategyVault is Test {
 
     function setUp() external {
         deployer = new DeployMultiStrategyVault();
-        // (multiStrategyVault, helperConfig) = deployer.deployContract();
         (multiStrategyVault,) = deployer.deployContract();
         mUSDC = address(multiStrategyVault.asset());
 
@@ -143,5 +142,46 @@ contract TestMultiStrategyVault is Test {
         multiStrategyVault.claimWithdraw(requestId);
         vm.stopPrank();
         assertEq(MockERC20(mUSDC).balanceOf(user1), seedAmount + yieldAmount);
+        (,, bool claimed) = multiStrategyVault.withdrawalRequests(0);
+        assertEq(claimed, true);
+    }
+
+    // Test suite that shows concentration risk is prevented while setting allocations
+    function testSetAllocationRevertsOnConcentrationRisk() public {
+        vm.startPrank(DEFAULT_SENDER);
+        MockInstantStrategy protocolA = new MockInstantStrategy(ERC20(mUSDC));
+        uint256 protocolATargetBps = 8000; // 80%
+        MockInstantStrategy protocolB = new MockInstantStrategy(ERC20(mUSDC));
+        uint256 protocolBTargetBps = 2000; // 30% (this will cause concentration risk)
+        MultiStrategyVault.Allocation[] memory newAllocations = new MultiStrategyVault.Allocation[](2);
+        newAllocations[0] = MultiStrategyVault.Allocation({strategy: address(protocolA), targetBps: protocolATargetBps});
+        newAllocations[1] = MultiStrategyVault.Allocation({strategy: address(protocolB), targetBps: protocolBTargetBps});
+        vm.expectRevert(MultiStrategyVault.MultiStrategyVault__AllocationExceedsMaxBpsPerStrategy.selector);
+        multiStrategyVault.setAllocations(newAllocations);
+        vm.stopPrank();
+    }
+
+    function testConcentrationRiskOnNewDeposit() public {
+        uint256 depositAmount = 1000 ether;
+        depositToVault(user1, depositAmount);
+
+        // Currently, strategy 1 has 10% deposit i.e 100 ether
+        //  Strategy 2 has 20% deposit i.e 200 ether
+        //  Strategy 3 has 30% deposit i.e 300 ether
+
+        // Simulate 50% yield on protocol A
+        vm.startPrank(yieldProvider1);
+        uint256 yieldBps = 1000; // 50% yield
+        uint256 yieldAmount = (MockInstantStrategy(strategy1).totalAssets() * yieldBps) / MAX_BPS;
+        MockERC20(mUSDC).approve(strategy1, yieldAmount);
+        MockInstantStrategy(strategy1).simulateYield(yieldAmount);
+        vm.stopPrank();
+
+        // Now strategy 1 has 150 ether because of yield
+
+        depositToVault(user2, depositAmount);
+        // On new deposit, if checks were not in place, strategy 1 would receive 100 ether
+        // However, it should receive only 50 ether to prevent concentration risk. (10% of total 2000 ether = 200 ether)
+        assertEq(MockInstantStrategy(strategy1).totalAssets(), 200 ether);
     }
 }
