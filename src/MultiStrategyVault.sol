@@ -135,18 +135,25 @@ contract MultiStrategyVault is ERC4626, AccessControl {
     }
 
     function afterDeposit(uint256 assets, uint256 shares) internal virtual override {
+        uint256 total = totalAssets();
         for (uint256 i = 0; i < allocations.length; i++) {
             Allocation memory allocation = allocations[i];
+            uint256 maxAllowed = (total * allocation.targetBps) / MAX_BPS;
+            uint256 currentAmount = IStrategy(allocation.strategy).totalAssets();
+            if (maxAllowed <= currentAmount) {
+                continue;
+            }
+
             uint256 allocationAmount = (assets * allocation.targetBps) / MAX_BPS;
-            asset.approve(allocation.strategy, allocationAmount);
-            IStrategy(allocation.strategy).deposit(allocationAmount);
+            uint256 toDeposit = maxAllowed - currentAmount;
+            if (allocationAmount < toDeposit) {
+                toDeposit = allocationAmount;
+            }
+
+            asset.approve(allocation.strategy, toDeposit);
+            IStrategy(allocation.strategy).deposit(toDeposit);
         }
     }
-
-    // Requirements:
-    // 1. If underlying has instant liquidity → immediate withdrawal
-    // 2. If underlying has lockup → queue the withdrawal, user claims later
-    // 3. Track pending withdrawals per user
 
     // Only fetch from strategies with instant liquidity (no lockup)
     function _availableLiquidity() internal view returns (uint256) {
