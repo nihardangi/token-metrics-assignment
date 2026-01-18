@@ -171,7 +171,7 @@ contract TestMultiStrategyVault is Test {
 
         // Simulate 50% yield on protocol A
         vm.startPrank(yieldProvider1);
-        uint256 yieldBps = 1000; // 50% yield
+        uint256 yieldBps = 5000; // 50% yield
         uint256 yieldAmount = (MockInstantStrategy(strategy1).totalAssets() * yieldBps) / MAX_BPS;
         MockERC20(mUSDC).approve(strategy1, yieldAmount);
         MockInstantStrategy(strategy1).simulateYield(yieldAmount);
@@ -181,7 +181,7 @@ contract TestMultiStrategyVault is Test {
 
         depositToVault(user2, depositAmount);
         // On new deposit, if checks were not in place, strategy 1 would receive 100 ether
-        // However, it should receive only 50 ether to prevent concentration risk. (10% of total 2000 ether = 200 ether)
-        assertEq(MockInstantStrategy(strategy1).totalAssets(), 200 ether);
+        // However, it should receive only 55 ether to prevent concentration risk. (10% of total 2050 ether = 205 ether)
+        assertEq(MockInstantStrategy(strategy1).totalAssets(), 205 ether);
     }
 }

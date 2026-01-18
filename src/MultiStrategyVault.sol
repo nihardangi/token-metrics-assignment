@@ -33,6 +33,16 @@ import {IStrategy} from "./interfaces/IStrategy.sol";
 */
 contract MultiStrategyVault is ERC4626, AccessControl {
     ////////////////
+    ///  Events  ///
+    ////////////////
+    event AllocationsUpdated(address indexed manager);
+    event Rebalanced(address indexed manager, uint256 totalAssets);
+    event WithdrawalRequested(uint256 indexed requestId, address indexed user, uint256 assets);
+    event WithdrawalClaimed(uint256 indexed requestId, address indexed user, uint256 assets);
+    event Paused(address indexed admin);
+    event Unpaused(address indexed admin);
+
+    ////////////////
     ///  Errors  ///
     ////////////////
     error MultiStrategyVault__AllocationExceedsMaxBpsPerStrategy();
@@ -120,6 +130,7 @@ contract MultiStrategyVault is ERC4626, AccessControl {
             // Set the allocation for each strategy
             allocations.push(_allocations[i]);
         }
+        emit AllocationsUpdated(msg.sender);
     }
 
     /*
@@ -176,6 +187,7 @@ contract MultiStrategyVault is ERC4626, AccessControl {
                 IStrategy(allocation.strategy).deposit(deficit);
             }
         }
+        emit Rebalanced(msg.sender, total);
     }
 
     /*    
@@ -213,6 +225,7 @@ contract MultiStrategyVault is ERC4626, AccessControl {
             requestId = nextRequestId++;
             withdrawalRequests[requestId] = WithdrawRequest({user: msg.sender, assets: pending, claimed: false});
             userToWithdrawalRequests[msg.sender].push(requestId);
+            emit WithdrawalRequested(requestId, msg.sender, pending);
         }
     }
 
@@ -231,6 +244,7 @@ contract MultiStrategyVault is ERC4626, AccessControl {
         withdrawalRequests[requestId].claimed = true;
         _pullLiquidFunds(req.assets);
         asset.transfer(msg.sender, req.assets);
+        emit WithdrawalClaimed(requestId, msg.sender, req.assets);
     }
 
     /*
@@ -271,6 +285,7 @@ contract MultiStrategyVault is ERC4626, AccessControl {
      */
     function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         paused = true;
+        emit Paused(msg.sender);
     }
 
     /*
@@ -279,6 +294,7 @@ contract MultiStrategyVault is ERC4626, AccessControl {
      */
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         paused = false;
+        emit Unpaused(msg.sender);
     }
 
     //////////////////////////////////////
