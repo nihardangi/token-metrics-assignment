@@ -14,6 +14,10 @@ contract MultiStrategyVault is ERC4626, AccessControl {
     error MultiStrategyVault__AllocationBpsShouldBeGreaterThanZero();
     error MultiStrategyVault__AllocationStrategyAddressCannotBeZero();
     error MultiStrategyVault__TotalAllocationExceedsMaxBps();
+    error MultiStrategyVault__SharesMustBeGreaterThanZero();
+    error MultiStrategyVault__InsufficientLiquidity();
+    error MultiStrategyVault__OnlyRequestOwnerCanCall();
+    error MultiStrategyVault__RequestAlreadyClaimed();
 
     ///////////////
     ///  Types  ///
@@ -21,6 +25,12 @@ contract MultiStrategyVault is ERC4626, AccessControl {
     struct Allocation {
         address strategy;
         uint256 targetBps;
+    }
+
+    struct WithdrawRequest {
+        address user;
+        uint256 assets;
+        bool claimed;
     }
 
     /////////////////////////
@@ -31,6 +41,9 @@ contract MultiStrategyVault is ERC4626, AccessControl {
     uint256 public constant MAX_BPS = 10_000; // 100%
     uint256 public constant MAX_BPS_PER_STRATEGY = 5_000; // 50%
     Allocation[] public allocations;
+    mapping(uint256 => WithdrawRequest) public withdrawalRequests;
+    mapping(address => uint256[]) public userToWithdrawalRequests;
+    uint256 public nextRequestId;
 
     constructor(ERC20 asset) ERC4626(asset, "TokenMetricsVaultToken", "TMVT") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -113,5 +126,85 @@ contract MultiStrategyVault is ERC4626, AccessControl {
             asset.approve(allocation.strategy, allocationAmount);
             IStrategy(allocation.strategy).deposit(allocationAmount);
         }
+    }
+
+    // Requirements:
+    // 1. If underlying has instant liquidity → immediate withdrawal
+    // 2. If underlying has lockup → queue the withdrawal, user claims later
+    // 3. Track pending withdrawals per user
+
+    // Only fetch from strategies with instant liquidity (no lockup)
+    function _availableLiquidity() internal view returns (uint256) {
+        uint256 available = asset.balanceOf(address(this));
+        for (uint256 i = 0; i < allocations.length; i++) {
+            Allocation memory allocation = allocations[i];
+            if (!IStrategy(allocation.strategy).hasLockup()) {
+                available += IStrategy(allocation.strategy).totalAssets();
+            }
+        }
+        return available;
+    }
+
+    // Pull funds from strategies with instant liquidity (no lockup)
+    function _pullLiquidFunds(uint256 assets) internal {
+        uint256 remaining = assets;
+        for (uint256 i = 0; i < allocations.length; i++) {
+            Allocation memory allocation = allocations[i];
+            if (!IStrategy(allocation.strategy).hasLockup()) {
+                uint256 available = IStrategy(allocation.strategy).totalAssets();
+                if (available > 0) {
+                    uint256 toWithdraw = available < remaining ? available : remaining;
+                    IStrategy(allocation.strategy).withdraw(toWithdraw, address(this));
+                    remaining -= toWithdraw;
+                }
+            }
+            if (remaining == 0) break;
+        }
+        if (remaining != 0) {
+            revert MultiStrategyVault__InsufficientLiquidity();
+        }
+    }
+
+    function requestWithdraw(uint256 shares) external returns (uint256 requestId) {
+        if (shares <= 0) {
+            revert MultiStrategyVault__SharesMustBeGreaterThanZero();
+        }
+        uint256 assets = convertToAssets(shares);
+        uint256 availableLiquidity = _availableLiquidity();
+        _burn(msg.sender, shares);
+        uint256 immediate = assets <= availableLiquidity ? assets : availableLiquidity;
+        if (immediate > 0) {
+            // Immediate withdrawal and transfer to user.
+            _pullLiquidFunds(assets);
+            asset.transfer(msg.sender, immediate);
+        }
+        uint256 pending = assets - immediate;
+        if (pending > 0) {
+            // Create withdrawal request
+            requestId = nextRequestId++;
+            withdrawalRequests[requestId] = WithdrawRequest({user: msg.sender, assets: pending, claimed: false});
+            userToWithdrawalRequests[msg.sender].push(requestId);
+        }
+    }
+
+    function claimWithdraw(uint256 requestId) external {
+        WithdrawRequest memory req = withdrawalRequests[requestId];
+        if (msg.sender != req.user) {
+            revert MultiStrategyVault__OnlyRequestOwnerCanCall();
+        }
+        if (req.claimed) {
+            revert MultiStrategyVault__RequestAlreadyClaimed();
+        }
+        req.claimed = true;
+        _pullLiquidFunds(req.assets);
+        asset.transfer(msg.sender, req.assets);
+    }
+
+    function canClaim(uint256 requestId) public view returns (bool) {
+        WithdrawRequest memory req = withdrawalRequests[requestId];
+        if (req.claimed) {
+            return false;
+        }
+        return _availableLiquidity() >= req.assets;
     }
 }
